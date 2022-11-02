@@ -1,20 +1,22 @@
 package trackerapi
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
-	u "os/user"
+	"strings"
 
-	"github.com/GoBootcamp/clirescue/cmdutil"
-	"github.com/GoBootcamp/clirescue/user"
+	"app/cmdutil"
+	"app/user"
 )
 
 var (
 	URL          string     = "https://www.pivotaltracker.com/services/v5/me"
-	FileLocation string     = homeDir() + "/.tracker"
+	FileLocation string     = "./.tracker"
+	FileCache	string = "./.cache"
 	currentUser  *user.User = user.New()
 	Stdout       *os.File   = os.Stdout
 )
@@ -22,15 +24,16 @@ var (
 func Me() {
 	setCredentials()
 	parse(makeRequest())
-	ioutil.WriteFile(FileLocation, []byte(currentUser.APIToken), 0644)
+	fmt.Printf("File location: %v", FileLocation)
+	os.WriteFile(FileLocation, []byte(currentUser.APIToken), 0644)
 }
 
 func makeRequest() []byte {
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", URL, nil)
+	req, _ := http.NewRequest("GET", URL, nil)
 	req.SetBasicAuth(currentUser.Username, currentUser.Password)
-	resp, err := client.Do(req)
-	body, err := ioutil.ReadAll(resp.Body)
+	resp, _ := client.Do(req)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Print(err)
 	}
@@ -46,23 +49,61 @@ func parse(body []byte) {
 	}
 
 	currentUser.APIToken = meResp.APIToken
+	fmt.Printf("%v", currentUser)
 }
 
 func setCredentials() {
-	fmt.Fprint(Stdout, "Username: ")
-	var username = cmdutil.ReadLine()
-	cmdutil.Silence()
-	fmt.Fprint(Stdout, "Password: ")
-
-	var password = cmdutil.ReadLine()
-	currentUser.Login(username, password)
-	cmdutil.Unsilence()
+	fmt.Println("Loading Username and Password from cache....")
+	exist, username, password := checkUserExistInCache()
+	if exist {
+		currentUser.Login(username, password)
+	} else {
+		os.Create(FileCache)
+		fmt.Fprint(Stdout, "\nUsername: ")
+		username = cmdutil.ReadLine()
+		cmdutil.Silence()
+		fmt.Fprint(Stdout, "Password: ")
+		password = cmdutil.ReadLine()
+		fmt.Printf("Username %v - Password: %v \n", username, password)
+		f, err := os.OpenFile(FileCache, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Open file Cache: %v",err)
+		}
+		if _, err := f.Write([]byte(username+"\n"+password)); err != nil {
+			fmt.Printf("Write Cache: %v",err)
+		}
+		if err := f.Close(); err != nil {
+			fmt.Printf("Write Cache: %v",err)
+		}
+		currentUser.Login(username, password)
+		cmdutil.Unsilence()
+	}
+	
 }
 
-func homeDir() string {
-	usr, _ := u.Current()
-	return usr.HomeDir
+func checkUserExistInCache() (bool, string, string){
+	f, err := os.Open(FileCache)
+	if err != nil {
+		fmt.Printf("Error: %v", err)
+		return false, "",""
+	}
+	defer f.Close()
+	bufReader := bufio.NewReader(f)
+	usernameData,_,errUsername := bufReader.ReadLine()
+	if errUsername != nil {
+		fmt.Printf("error: %v\n",errUsername)
+		return false, "" ,""
+	}
+	username := strings.Trim(string(usernameData)," ")
+	passwordData,_,errPassword := bufReader.ReadLine()
+	if errPassword != nil {
+		fmt.Printf("error: %v\n",errUsername)
+		return false, "" ,""
+	}
+	password := strings.Trim(string(passwordData)," ")
+	return true, username, password
 }
+
 
 type MeResponse struct {
 	APIToken string `json:"api_token"`
